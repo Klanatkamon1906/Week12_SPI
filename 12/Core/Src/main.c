@@ -51,10 +51,56 @@ TIM_HandleTypeDef htim11;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+// Setup Board output ------------------------------------------------------------------------------------
+float WaveFreq[3] = {1 ,1 ,1};			// sawtooth ,sine , square
+float WaveVhigh[3] = {3.3 ,3.3 ,3.3};	// sawtooth ,sine , square
+float WaveVlow[3] = {0.0 ,0.0 ,0.0};	// sawtooth ,sine , square
+uint8_t DutyCycle = 50;		// for square wave
+uint32_t WaveTimestamp = 0;
+
+// Setup UART --------------------------------------------------------------------------------------------
+char TxDataBuffer[32] = { 0 };
+char RxDataBuffer[32] = { 0 };
+
+// Setup ADC ---------------------------------------------------------------------------------------------
 uint16_t ADCin = 0;
-uint64_t _micro = 0;
-uint16_t dataOut = 0;
-	uint8_t DACConfig = 0b0011;
+uint64_t _micro = 0;		// time counter
+
+// MCP4922 Communication format --------------------------------------------------------------------------
+uint16_t dataOut = 0;		// data
+uint8_t DACConfig = 0b0011;	// start form 1xdata
+
+// Setup State -------------------------------------------------------------------------------------------
+typedef enum{
+	selectWave = 0,
+	WaitSelect = 9,
+
+	WaveSawtooth = 10,
+	KeySawVmax = 11,
+	WaitSawVmax = 12,
+	KeySawVmin = 13,
+	WaitSawVmin = 14,
+	KeySawFreq = 15,
+	WaitSawFreq = 16,
+
+	WaveSine = 20,
+	KeySineVmax = 21,
+	WaitSineVmax = 22,
+	KeySineVmin = 23,
+	WaitSineVmin = 24,
+	KeySineFreq = 25,
+	WaitSineFreq = 26,
+
+	WaveSquare = 30,
+	KeySquareVmax = 31,
+	WaitSquareVmax = 32,
+	KeySquareVmin = 33,
+	WaitSquareVmin = 34,
+	KeySquareFreq = 35,
+	WaitSquareFreq = 36,
+	KeySquareDuty = 37,
+	WaitSquareDuty = 38
+};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
