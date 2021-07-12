@@ -22,7 +22,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -52,11 +54,15 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 // Setup Board output ------------------------------------------------------------------------------------
-float WaveFreq[3] = {1 ,1 ,1};			// sawtooth ,sine , square
-float WaveVhigh[3] = {3.3 ,3.3 ,3.3};	// sawtooth ,sine , square
-float WaveVlow[3] = {0.0 ,0.0 ,0.0};	// sawtooth ,sine , square
+int WaveFreq[3] = {10 ,10 ,10};			// sawtooth ,sine , square in 1Hz
+int WaveVhigh[3] = {33 ,33 ,33};	// sawtooth ,sine , square
+int WaveVlow[3] = {0 ,0 ,0};	// sawtooth ,sine , square
+float Rad = 0;				// for sine wave
+uint8_t WaveSawIsUp = 1;	// for sawtooth wave
 uint8_t DutyCycle = 50;		// for square wave
 uint32_t WaveTimestamp = 0;
+
+float Vout = 0;
 
 // Setup UART --------------------------------------------------------------------------------------------
 char TxDataBuffer[32] = { 0 };
@@ -72,35 +78,15 @@ uint8_t DACConfig = 0b0011;	// start form 1xdata
 
 // Setup State -------------------------------------------------------------------------------------------
 typedef enum{
-	selectWave = 0,
-	WaitSelect = 9,
-
-	WaveSawtooth = 10,
-	KeySawVmax = 11,
-	WaitSawVmax = 12,
-	KeySawVmin = 13,
-	WaitSawVmin = 14,
-	KeySawFreq = 15,
-	WaitSawFreq = 16,
-
-	WaveSine = 20,
-	KeySineVmax = 21,
-	WaitSineVmax = 22,
-	KeySineVmin = 23,
-	WaitSineVmin = 24,
-	KeySineFreq = 25,
-	WaitSineFreq = 26,
-
-	WaveSquare = 30,
-	KeySquareVmax = 31,
-	WaitSquareVmax = 32,
-	KeySquareVmin = 33,
-	WaitSquareVmin = 34,
-	KeySquareFreq = 35,
-	WaitSquareFreq = 36,
-	KeySquareDuty = 37,
-	WaitSquareDuty = 38
-};
+	selectWave 		 = 0,
+	WaitSelect 		 = 9,
+	WaveSawtooth 	 = 10,
+	WaitSawSelect 	 = 15,
+	WaveSine 		 = 20,
+	WaitSineSelect 	 = 25,
+	WaveSquare 		 = 30,
+	WaitSquareSelect = 35
+}Mode;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -108,13 +94,14 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_SPI3_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_SPI3_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM11_Init(void);
 /* USER CODE BEGIN PFP */
 void MCP4922SetOutput(uint8_t Config, uint16_t DACOutput);
 uint64_t micros();
+int16_t UARTRecieveIT();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -152,8 +139,8 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_USART2_UART_Init();
-  MX_SPI3_Init();
   MX_ADC1_Init();
+  MX_SPI3_Init();
   MX_TIM3_Init();
   MX_TIM11_Init();
   /* USER CODE BEGIN 2 */
@@ -162,25 +149,578 @@ int main(void)
 	HAL_ADC_Start_DMA(&hadc1, (uint32_t*) &ADCin, 1);
 
 	HAL_GPIO_WritePin(LOAD_GPIO_Port, LOAD_Pin, GPIO_PIN_RESET);
+int	State = selectWave;
+
+	{ // for local parameter --> more memories
+		char temp[] = "Turn on mini-function generator and osciloscope \r\n";
+		HAL_UART_Transmit(&huart2, (uint8_t*) temp, strlen(temp), 100);
+	}
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 	while (1)
 	{
-		static uint64_t timestamp = 0;
-		if (micros() - timestamp > 100)
-		{
-			timestamp = micros();
-			dataOut++;
-			dataOut %= 4096;
-			if (hspi3.State == HAL_SPI_STATE_READY
-					&& HAL_GPIO_ReadPin(SPI_SS_GPIO_Port, SPI_SS_Pin)
-							== GPIO_PIN_SET)
-			{
-				MCP4922SetOutput(DACConfig, dataOut);
-			}
+// Communication part -------------------------------------------------------------------------------------
+		HAL_UART_Receive_IT(&huart2, (uint8_t*) RxDataBuffer, 32);
+		int16_t inputchar = UARTRecieveIT();
+		if (inputchar != -1) {
+
+			sprintf(TxDataBuffer, "ReceivedChar:[%c]\r\n", inputchar);
+			HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+		}// for check by looking at monitor
+// GUI part -----------------------------------------------------------------------------------------------
+		switch(State){
+			case(selectWave):
+				sprintf(TxDataBuffer, "----Please select wave form----\n\r");
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+				sprintf(TxDataBuffer, "[1]:Sawtooth     [2]:Sine     [3]:Square \n\n\r");
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+				State = WaitSelect;
+				break;
+			case(WaitSelect):
+					dataOut = 0;
+				if (hspi3.State == HAL_SPI_STATE_READY && HAL_GPIO_ReadPin(SPI_SS_GPIO_Port, SPI_SS_Pin)== GPIO_PIN_SET)
+					{
+						MCP4922SetOutput(DACConfig, dataOut);
+					}
+				switch(inputchar){
+					case -1:
+						break;
+					case '1':
+						State = WaveSawtooth;
+						break;
+					case '2':
+						State = WaveSine;
+						break;
+					case '3':
+						State = WaveSquare;
+						break;
+					default:
+						sprintf(TxDataBuffer, "press only [1] ,[2] or [3] \n\n\r");
+						HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+						State = WaitSelect;
+						break;
+					}
+				break;
+// Sawtooth wave ---------------------------------------------------------------------------------------
+			case(WaveSawtooth):
+				if(WaveSawIsUp == 1){
+					sprintf(TxDataBuffer, "Wave form: Sawtooth\n\r");
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+					sprintf(TxDataBuffer, "[-a.s] V_high: %d.%d V [+q.w]		[-d.f] V_low: %d.%d V [+e.r]\n\r",WaveVhigh[0]/10 ,WaveVhigh[0]%10 ,WaveVlow[0]/10 ,WaveVlow[0]%10);
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+					sprintf(TxDataBuffer, "[-g.h] Frequency: %d.%d Hz [+t.y]	[z] type: Up sawtooth\n\r",WaveFreq[0]/10 ,WaveFreq[0]%10);
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+					sprintf(TxDataBuffer, "[x] back to select wave from\n\n\r");
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+					dataOut = WaveVlow[1]/10;
+				}
+				else if(WaveSawIsUp == 0){
+					sprintf(TxDataBuffer, "Wave form: Sawtooth\n\r");
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+					sprintf(TxDataBuffer, "[-a.s] V_high: %d.%d V [+q.w]		[-d.f] V_low: %d.%d V [+e.r]\n\r",WaveVhigh[0]/10 ,WaveVhigh[0]%10 ,WaveVlow[0]/10 ,WaveVlow[0]%10);
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+					sprintf(TxDataBuffer, "[-g.h] Frequency: %d.%d Hz [+t.y]	[z] type: Down sawtooth\n\r",WaveFreq[0]/10 ,WaveFreq[0]%10);
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+					sprintf(TxDataBuffer, "[x] back to select wave from\n\n\r");
+					HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+					dataOut = WaveVhigh[1]/10;
+				}
+				WaveTimestamp = micros();
+				State = WaitSawSelect;
+				break;
+			case(WaitSawSelect):
+				if(WaveSawIsUp == 1)
+				{
+					if (micros() - WaveTimestamp >= (1000000/(((WaveVhigh[0] - WaveVlow[0])*4096/(float)33)*(WaveFreq[0]/(float)10))))
+					{
+						WaveTimestamp = micros();
+						if(dataOut >= WaveVhigh[0]*4096/33)
+						{
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						else{
+							dataOut += 1;
+						}
+						if (hspi3.State == HAL_SPI_STATE_READY && HAL_GPIO_ReadPin(SPI_SS_GPIO_Port, SPI_SS_Pin) == GPIO_PIN_SET)
+						{
+							MCP4922SetOutput(DACConfig, dataOut);
+						}
+					}
+				}
+				else
+				{
+					if (micros() - WaveTimestamp >= (1000000/(((WaveVhigh[0] - WaveVlow[0])*4096/(float)33)*(WaveFreq[0]/(float)10))))
+					{
+						WaveTimestamp = micros();
+						if(dataOut <= WaveVlow[0]*4096/33)
+						{
+							dataOut = WaveVhigh[0]*4096/33;
+						}
+						else{
+							dataOut -= 1;
+						}
+						if (hspi3.State == HAL_SPI_STATE_READY && HAL_GPIO_ReadPin(SPI_SS_GPIO_Port, SPI_SS_Pin) == GPIO_PIN_SET)
+						{
+							MCP4922SetOutput(DACConfig, dataOut);
+						}
+					}
+				}
+				switch(inputchar){
+					case -1:
+						break;
+					case 'a':
+						WaveVhigh[0] -= 10;
+						if(WaveVhigh[0] <= WaveVlow[0])
+						{
+							sprintf(TxDataBuffer, "V_high can not be less than or equal to V_low\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] += 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 's':
+						WaveVhigh[0] -= 1;
+						if(WaveVhigh[0] <= WaveVlow[0])
+						{
+							sprintf(TxDataBuffer, "V_high can not be less than or equal to V_low\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] += 1;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'q':
+						WaveVhigh[0] += 10;
+						if(WaveVhigh[0] > 33)
+						{
+							sprintf(TxDataBuffer, "V_high can not be more than 3.3 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] -= 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'w':
+						WaveVhigh[0] += 1;
+						if(WaveVhigh[0] > 33)
+						{
+							sprintf(TxDataBuffer, "V_high can not be more than 3.3 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] -= 1;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'd':
+						WaveVlow[0] -= 10;
+						if(WaveVlow[0] < 0)
+						{
+							sprintf(TxDataBuffer, "V_low can not be less than 0.0 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] += 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'f':
+						WaveVlow[0] -= 1;
+						if(WaveVlow[0] < 0)
+						{
+							sprintf(TxDataBuffer, "V_low can not be less than 0.0 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] += 1;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'e':
+						WaveVlow[0] += 10;
+						if(WaveVlow[0] >= WaveVhigh[0])
+						{
+							sprintf(TxDataBuffer, "V_low can not be more than or equal to V_high\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] -= 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'r':
+						WaveVlow[0] += 1;
+						if(WaveVlow[0] >= WaveVhigh[0])
+						{
+							sprintf(TxDataBuffer, "V_low can not be more than or equal to V_high\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] -= 1;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'g':
+						WaveFreq[0] -= 10;
+						if(WaveFreq[0] < 0)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be lass than 0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] += 10;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'h':
+						WaveFreq[0] -= 1;
+						if(WaveFreq[0] < 0)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be lass than 0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] += 1;
+						}
+						State = WaveSawtooth;
+						break;
+					case 't':
+						WaveFreq[0] += 10;
+						if(WaveFreq[0] > 100)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be more than 10.0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] -= 10;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'y':
+						WaveFreq[0] += 1;
+						if(WaveFreq[0] > 100)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be more than 10.0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] -= 1;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'z':
+						if(WaveSawIsUp == 0){
+							WaveSawIsUp = 1;
+						}
+						else{
+							WaveSawIsUp = 0;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'x':
+						State = selectWave;
+						break;
+				State = WaitSawSelect;
+				break;
+		}break;
+
+// Sine wave ---------------------------------------------------------------------------------------
+			case(WaveSine):
+				sprintf(TxDataBuffer, "Wave form: Sine\n\r");
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+				sprintf(TxDataBuffer, "[-a.s] V_high: %d.%d V [+q.w]		[-d.f] V_low: %d.%d V [+e.r]\n\r",WaveVhigh[1]/10 ,WaveVhigh[1]%10 ,WaveVlow[1]/10 ,WaveVlow[1]%10);
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+				sprintf(TxDataBuffer, "[-g.h] Frequency: %d.%d Hz [+t.y]\n\r",WaveFreq[1]/10 ,WaveFreq[1]%10);
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+				sprintf(TxDataBuffer, "[x] back to select wave from\n\n\r");
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+				dataOut = WaveVlow[1]/10;
+				WaveTimestamp = micros();
+				State = WaitSineSelect;
+				break;
+			case(WaitSineSelect):
+				if (micros() - WaveTimestamp >= 1000/6.28) // convert to 1 second in 2pi
+				{
+					WaveTimestamp = micros();
+					Rad += 0.001;
+					dataOut = (sin(Rad*WaveFreq[1]/10) * (((WaveVhigh[1] - WaveVlow[1])*4096/33)/2)) + (((WaveVhigh[1] - WaveVlow[1])*4096/33)/2) + (WaveVlow[1]*4096/33);
+					if (hspi3.State == HAL_SPI_STATE_READY && HAL_GPIO_ReadPin(SPI_SS_GPIO_Port, SPI_SS_Pin) == GPIO_PIN_SET)
+					{
+						MCP4922SetOutput(DACConfig, dataOut);
+					}
+				}
+				switch(inputchar){
+					case -1:
+						break;
+					case 'a':
+						WaveVhigh[1] -= 10;
+						if(WaveVhigh[1] <= WaveVlow[1])
+						{
+							sprintf(TxDataBuffer, "V_high can not be less than or equal to V_low\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] += 10;
+						}
+						State = WaveSine;
+						break;
+					case 's':
+						WaveVhigh[1] -= 1;
+						if(WaveVhigh[1] <= WaveVlow[1])
+						{
+							sprintf(TxDataBuffer, "V_high can not be less than or equal to V_low\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[1] += 1;
+						}
+						State = WaveSine;
+						break;
+					case 'q':
+						WaveVhigh[1] += 10;
+						if(WaveVhigh[1] > 33)
+						{
+							sprintf(TxDataBuffer, "V_high can not be more than 3.3 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[1] -= 10;
+						}
+						State = WaveSine;
+						break;
+					case 'w':
+						WaveVhigh[1] += 1;
+						if(WaveVhigh[1] > 33)
+						{
+							sprintf(TxDataBuffer, "V_high can not be more than 3.3 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[1] -= 1;
+						}
+						State = WaveSine;
+						break;
+					case 'd':
+						WaveVlow[1] -= 10;
+						if(WaveVlow[1] < 0)
+						{
+							sprintf(TxDataBuffer, "V_low can not be less than 0.0 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[1] += 10;
+						}
+						State = WaveSine;
+						break;
+					case 'f':
+						WaveVlow[1] -= 1;
+						if(WaveVlow[1] < 0)
+						{
+							sprintf(TxDataBuffer, "V_low can not be less than 0.0 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[1] += 1;
+						}
+						State = WaveSine;
+						break;
+					case 'e':
+						WaveVlow[1] += 10;
+						if(WaveVlow[1] >= WaveVhigh[1])
+						{
+							sprintf(TxDataBuffer, "V_low can not be more than or equal to V_high\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[1] -= 10;
+						}
+						State = WaveSine;
+						break;
+					case 'r':
+						WaveVlow[1] += 1;
+						if(WaveVlow[1] >= WaveVhigh[1])
+						{
+							sprintf(TxDataBuffer, "V_low can not be more than or equal to V_high\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[1] -= 1;
+						}
+						State = WaveSine;
+						break;
+					case 'g':
+						WaveFreq[1] -= 10;
+						if(WaveFreq[1] < 0)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be lass than 0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[1] += 10;
+						}
+						State = WaveSine;
+						break;
+					case 'h':
+						WaveFreq[1] -= 1;
+						if(WaveFreq[1] < 0)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be lass than 0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[1] += 1;
+						}
+						State = WaveSine;
+						break;
+					case 't':
+						WaveFreq[1] += 10;
+						if(WaveFreq[1] > 100)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be more than 10.0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[1] -= 10;
+						}
+						State = WaveSine;
+						break;
+					case 'y':
+						WaveFreq[1] += 1;
+						if(WaveFreq[1] > 100)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be more than 10.0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[1] -= 1;
+						}
+						State = WaveSine;
+						break;
+					case 'x':
+						State = selectWave;
+						break;
+				State = WaitSineSelect;
+				break;
+				}break;
+// Square wave ---------------------------------------------------------------------------------------
+			case(WaveSquare):
+				sprintf(TxDataBuffer, "Wave form: Square\n\r");
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+				sprintf(TxDataBuffer, "[-a.s] V_high: %d.%d V [+q.w]		[-d.f] V_low: %d.%d V [+e.r]\n\r",WaveVhigh[2]/10 ,WaveVhigh[2]%10 ,WaveVlow[2]/10 ,WaveVlow[2]%10);
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+				sprintf(TxDataBuffer, "[-g.h] Frequency: %d.%d Hz [+t.y]	[-j k] Duty cycle: %d % [+u i]\n\r",WaveFreq[2]/10 ,WaveFreq[2]%10 ,DutyCycle);
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 1000);
+				sprintf(TxDataBuffer, "[x] back to select wave from\n\n\r");
+				HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+				dataOut = WaveVlow[1]/10;
+				WaveTimestamp = micros();
+				State = WaitSquareSelect;
+				break;
+			case(WaitSquareSelect):
+
+				switch(inputchar){
+					case -1:
+						break;
+					case 'a':
+						WaveVhigh[0] -= 10;
+						if(WaveVhigh[0] <= WaveVlow[0])
+						{
+							sprintf(TxDataBuffer, "V_high can not be less than or equal to V_low\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] += 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 's':
+						WaveVhigh[0] -= 1;
+						if(WaveVhigh[0] <= WaveVlow[0])
+						{
+							sprintf(TxDataBuffer, "V_high can not be less than or equal to V_low\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] += 1;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'q':
+						WaveVhigh[0] += 10;
+						if(WaveVhigh[0] > 33)
+						{
+							sprintf(TxDataBuffer, "V_high can not be more than 3.3 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] -= 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'w':
+						WaveVhigh[0] += 1;
+						if(WaveVhigh[0] > 33)
+						{
+							sprintf(TxDataBuffer, "V_high can not be more than 3.3 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVhigh[0] -= 1;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'd':
+						WaveVlow[0] -= 10;
+						if(WaveVlow[0] < 0)
+						{
+							sprintf(TxDataBuffer, "V_low can not be less than 0.0 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] += 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'f':
+						WaveVlow[0] -= 1;
+						if(WaveVlow[0] < 0)
+						{
+							sprintf(TxDataBuffer, "V_low can not be less than 0.0 V\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] += 1;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'e':
+						WaveVlow[0] += 10;
+						if(WaveVlow[0] >= WaveVhigh[0])
+						{
+							sprintf(TxDataBuffer, "V_low can not be more than or equal to V_high\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] -= 10;
+							dataOut = WaveVlow[0]*4096/33;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'r':
+						WaveVlow[0] += 1;
+						if(WaveVlow[0] >= WaveVhigh[0])
+						{
+							sprintf(TxDataBuffer, "V_low can not be more than or equal to V_high\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveVlow[0] -= 1;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'g':
+						WaveFreq[0] -= 10;
+						if(WaveFreq[0] < 0)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be lass than 0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] += 10;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'h':
+						WaveFreq[0] -= 1;
+						if(WaveFreq[0] < 0)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be lass than 0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] += 1;
+						}
+						State = WaveSawtooth;
+						break;
+					case 't':
+						WaveFreq[0] += 10;
+						if(WaveFreq[0] > 100)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be more than 10.0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] -= 10;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'y':
+						WaveFreq[0] += 1;
+						if(WaveFreq[0] > 100)
+						{
+							sprintf(TxDataBuffer, "Frequency can not be more than 10.0 Hz\n\n\r");
+							HAL_UART_Transmit(&huart2, (uint8_t*) TxDataBuffer,strlen(TxDataBuffer), 100);
+							WaveFreq[0] -= 1;
+						}
+						State = WaveSawtooth;
+						break;
+					case 'x':
+						State = selectWave;
+						break;
+				State = WaitSawSelect;
+				break;
+				}break;
 		}
+//
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -245,6 +785,7 @@ static void MX_ADC1_Init(void)
   /* USER CODE END ADC1_Init 0 */
 
   ADC_ChannelConfTypeDef sConfig = {0};
+  ADC_InjectionConfTypeDef sConfigInjected = {0};
 
   /* USER CODE BEGIN ADC1_Init 1 */
 
@@ -262,7 +803,7 @@ static void MX_ADC1_Init(void)
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DMAContinuousRequests = ENABLE;
-  hadc1.Init.EOCSelection = ADC_EOC_SEQ_CONV;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
   if (HAL_ADC_Init(&hadc1) != HAL_OK)
   {
     Error_Handler();
@@ -273,6 +814,21 @@ static void MX_ADC1_Init(void)
   sConfig.Rank = 1;
   sConfig.SamplingTime = ADC_SAMPLETIME_3CYCLES;
   if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configures for the selected ADC injected channel its corresponding rank in the sequencer and its sample time
+  */
+  sConfigInjected.InjectedChannel = ADC_CHANNEL_0;
+  sConfigInjected.InjectedRank = 1;
+  sConfigInjected.InjectedNbrOfConversion = 1;
+  sConfigInjected.InjectedSamplingTime = ADC_SAMPLETIME_3CYCLES;
+  sConfigInjected.ExternalTrigInjecConvEdge = ADC_EXTERNALTRIGINJECCONVEDGE_NONE;
+  sConfigInjected.ExternalTrigInjecConv = ADC_INJECTED_SOFTWARE_START;
+  sConfigInjected.AutoInjectedConv = DISABLE;
+  sConfigInjected.InjectedDiscontinuousConvMode = DISABLE;
+  sConfigInjected.InjectedOffset = 0;
+  if (HAL_ADCEx_InjectedConfigChannel(&hadc1, &sConfigInjected) != HAL_OK)
   {
     Error_Handler();
   }
@@ -339,7 +895,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 100;
+  htim3.Init.Prescaler = 99;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 100;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -381,7 +937,7 @@ static void MX_TIM11_Init(void)
 
   /* USER CODE END TIM11_Init 1 */
   htim11.Instance = TIM11;
-  htim11.Init.Prescaler = 100;
+  htim11.Init.Prescaler = 99;
   htim11.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim11.Init.Period = 65535;
   htim11.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -515,6 +1071,21 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 	{
 		HAL_GPIO_WritePin(SPI_SS_GPIO_Port, SPI_SS_Pin, GPIO_PIN_SET);
 	}
+}
+
+int16_t UARTRecieveIT() {
+static uint32_t dataPos = 0;
+int16_t data = -1;
+if (huart2.RxXferSize - huart2.RxXferCount != dataPos) {
+	data = RxDataBuffer[dataPos];
+	dataPos = (dataPos + 1) % huart2.RxXferSize;
+}
+return data;
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+sprintf(TxDataBuffer, "Received:[%s]\r\n", RxDataBuffer);
+HAL_UART_Transmit_IT(&huart2, (uint8_t*) TxDataBuffer, strlen(TxDataBuffer));
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
